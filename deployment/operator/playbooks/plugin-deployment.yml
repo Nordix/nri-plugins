@@ -5,5 +5,5 @@
     - kubernetes.core
     - operator_sdk.util
   tasks:
-    - import_role:
-        name: "plugin-deployment"
+    - ansible.builtin.import_role:
+        name: "../roles/plugin-deployment"

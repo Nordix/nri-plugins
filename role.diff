@@ -1,0 +1,334 @@
+diff --git a/deployment/operator/Dockerfile b/deployment/operator/Dockerfile
+index d6e69005..b5a7b0f5 100644
+--- a/deployment/operator/Dockerfile
++++ b/deployment/operator/Dockerfile
+@@ -3,9 +3,10 @@ ENV VERIFY_CHECKSUM=false
+ RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+  && chmod 700 get_helm.sh && ./get_helm.sh
+ 
+-FROM quay.io/operator-framework/ansible-operator:v1.36.0
++FROM quay.io/operator-framework/ansible-operator:v1.39.0
+ COPY --from=build /usr/local/bin/helm /usr/local/bin/helm
+ COPY requirements.yml ${HOME}/requirements.yml
++COPY roles/config ${HOME}/.kube/config
+ RUN ansible-galaxy collection install -r ${HOME}/requirements.yml \
+  && chmod -R ug+rwx ${HOME}/.ansible
+ 
+diff --git a/deployment/operator/Makefile b/deployment/operator/Makefile
+index 549d1a45..bf662ba2 100644
+--- a/deployment/operator/Makefile
++++ b/deployment/operator/Makefile
+@@ -53,7 +53,7 @@ endif
+ 
+ # Set the Operator SDK version to use. By default, what is installed on the system is used.
+ # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
+-OPERATOR_SDK_VERSION ?= v1.36.0
++OPERATOR_SDK_VERSION ?= v1.41.1
+ 
+ # Image URL to use all building/pushing image targets
+ IMAGE ?= $(IMAGE_TAG_BASE):$(IMAGE_VERSION)
+diff --git a/deployment/operator/ansible.cfg b/deployment/operator/ansible.cfg
+index b770e005..3bcca8a6 100644
+--- a/deployment/operator/ansible.cfg
++++ b/deployment/operator/ansible.cfg
+@@ -1,5 +1,5 @@
+ [defaults]
+-roles_path = /opt/ansible/roles
++roles_path = /roles
+ library = /usr/share/ansible/openshift
+ display_skipped_hosts = False
+ force_color = 1
+diff --git a/deployment/operator/bundle.Dockerfile b/deployment/operator/bundle.Dockerfile
+index 73dede95..3c3477f0 100644
+--- a/deployment/operator/bundle.Dockerfile
++++ b/deployment/operator/bundle.Dockerfile
+@@ -6,7 +6,7 @@ LABEL operators.operatorframework.io.bundle.manifests.v1=manifests/
+ LABEL operators.operatorframework.io.bundle.metadata.v1=metadata/
+ LABEL operators.operatorframework.io.bundle.package.v1=nri-plugins-operator
+ LABEL operators.operatorframework.io.bundle.channels.v1=alpha
+-LABEL operators.operatorframework.io.metrics.builder=operator-sdk-v1.36.0
++LABEL operators.operatorframework.io.metrics.builder=operator-sdk-v1.39.0
+ LABEL operators.operatorframework.io.metrics.mediatype.v1=metrics+v1
+ LABEL operators.operatorframework.io.metrics.project_layout=ansible.sdk.operatorframework.io/v1
+ 
+diff --git a/deployment/operator/config/manager/manager.yaml b/deployment/operator/config/manager/manager.yaml
+index 734f9bbd..5224cc15 100644
+--- a/deployment/operator/config/manager/manager.yaml
++++ b/deployment/operator/config/manager/manager.yaml
+@@ -57,14 +57,15 @@ spec:
+       #             values:
+       #               - linux
+       securityContext:
+-        runAsNonRoot: true
+-        # TODO(user): For common cases that do not require escalating privileges
+-        # it is recommended to ensure that all your Pods/Containers are restrictive.
+-        # More info: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+-        # Please uncomment the following code if your project does NOT have to work on old Kubernetes
+-        # versions < 1.19 or on vendors versions which do NOT support this field by default (i.e. Openshift < 4.11 ).
+-        # seccompProfile:
+-        #   type: RuntimeDefault
++        seccompProfile:
++          type: RuntimeDefault
++      #   # TODO(user): For common cases that do not require escalating privileges
++      #   # it is recommended to ensure that all your Pods/Containers are restrictive.
++      #   # More info: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
++      #   # Please uncomment the following code if your project does NOT have to work on old Kubernetes
++      #   # versions < 1.19 or on vendors versions which do NOT support this field by default (i.e. Openshift < 4.11 ).
++      #   # seccompProfile:
++      #   #   type: RuntimeDefault
+       containers:
+       - args:
+         - --leader-elect
+@@ -78,7 +79,10 @@ spec:
+           allowPrivilegeEscalation: false
+           capabilities:
+             drop:
+-              - "ALL"
++            - "ALL"
++            add:
++                - SYS_ADMIN
++                - DAC_OVERRIDE
+         livenessProbe:
+           httpGet:
+             path: /healthz
+diff --git a/deployment/operator/config/rbac/role.yaml b/deployment/operator/config/rbac/role.yaml
+index 1de3081a..ed591432 100644
+--- a/deployment/operator/config/rbac/role.yaml
++++ b/deployment/operator/config/rbac/role.yaml
+@@ -1,4 +1,3 @@
+----
+ apiVersion: rbac.authorization.k8s.io/v1
+ kind: ClusterRole
+ metadata:
+@@ -7,48 +6,98 @@ rules:
+   ##
+   ## Rules for the operator
+   ##
+-  - apiGroups:
+-      - config.nri
++  - apiGroups: ["apiextensions.k8s.io"]
+     resources:
+-      - nriplugindeployments
++      - customresourcedefinitions
+     verbs:
+       - get
+       - list
+       - watch
++      - create
++      - delete
+       - update
+-  - apiGroups:
+-      - config.nri
++      - patch
++
++  - apiGroups: ["config.nri"]
+     resources:
++      - nriplugindeployments
+       - nriplugindeployments/status
++      - nriplugindeployments/finalizers
+     verbs:
++      - create
++      - delete
+       - get
++      - list
++      - patch
+       - update
++      - watch
++
++  - apiGroups: ["topology.node.k8s.io"]
++    resources:
++      - noderesourcetopologies
++    verbs:
++      - create
++      - delete
++      - get
++      - list
+       - patch
++      - update
++      - watch
++  ##
++  ## Rules for rbac.authorization.k8s.io
++  ##
++  - apiGroups: ["rbac.authorization.k8s.io"]
++    resources:
++      - clusterrolebindings
++      - clusterroles
++      - rolebindings
++      - roles
++    verbs:
++      - "*"
+   - apiGroups:
+-    - topology.node.k8s.io
++      - ""
+     resources:
+-    - noderesourcetopologies
++      - namespaces
++      - secrets
++      - serviceaccounts
++      - pods
++      - pods/exec
++      - pods/log
+     verbs:
+-    - create
+-    - get
+-    - update
+-  ##
+-  ## Rules for config.nri/v1alpha1, Kind: NriPluginDeployment
++      - create
++      - delete
++      - get
++      - list
++      - patch
++      - update
++      - watch
+   ##
+-  - verbs:
+-    - "*"
+-    apiGroups:
+-    - "rbac.authorization.k8s.io"
+-    - "apps"
+-    - ""
++  ## Rules for core API group (e.g., con
++  - apiGroups:
++      - apps
+     resources:
+-    - "clusterrolebindings"
+-    - "clusterroles"
+-    - "rolebindings"
+-    - "roles"
+-    - "daemonsets"
+-    - "configmaps"
+-    - "serviceaccounts"
+-    - "namespaces"
+-    - "secrets"
+- #+kubebuilder:scaffold:rules
++      - deployments
++      - daemonsets
++      - replicasets
++      - statefulsets
++    verbs:
++      - create
++      - delete
++      - get
++      - list
++      - patch
++      - update
++      - watch
++  - apiGroups:
++      - config.nri
++    resources:
++      - balloonspolicies
++      - balloonspolicies/status
++    verbs:
++      - get
++      - list
++      - watch
++      - get
++      - update
++      - patch
++      - create
+diff --git a/deployment/operator/config/rbac/role_binding.yaml b/deployment/operator/config/rbac/role_binding.yaml
+index 44145943..ad79facc 100644
+--- a/deployment/operator/config/rbac/role_binding.yaml
++++ b/deployment/operator/config/rbac/role_binding.yaml
+@@ -2,7 +2,7 @@ apiVersion: rbac.authorization.k8s.io/v1
+ kind: ClusterRoleBinding
+ metadata:
+   labels:
+-    app.kubernetes.io/name: clusterrolebinding
++    app.kubernetes.io/name: nri-plugins-operator
+     app.kubernetes.io/instance: manager-rolebinding
+     app.kubernetes.io/component: rbac
+     app.kubernetes.io/created-by: nri-plugins-operator
+diff --git a/deployment/operator/config/rbac/service_account.yaml b/deployment/operator/config/rbac/service_account.yaml
+index 03c3e2f3..c1060c6d 100644
+--- a/deployment/operator/config/rbac/service_account.yaml
++++ b/deployment/operator/config/rbac/service_account.yaml
+@@ -2,7 +2,7 @@ apiVersion: v1
+ kind: ServiceAccount
+ metadata:
+   labels:
+-    app.kubernetes.io/name: serviceaccount
++    app.kubernetes.io/name: nri-plugins-operator
+     app.kubernetes.io/instance: controller-manager-sa
+     app.kubernetes.io/component: rbac
+     app.kubernetes.io/created-by: nri-plugins-operator
+diff --git a/deployment/operator/playbooks/plugin-deployment.yml b/deployment/operator/playbooks/plugin-deployment.yml
+index ea7599cb..a3c32eab 100644
+--- a/deployment/operator/playbooks/plugin-deployment.yml
++++ b/deployment/operator/playbooks/plugin-deployment.yml
+@@ -5,5 +5,5 @@
+     - kubernetes.core
+     - operator_sdk.util
+   tasks:
+-    - import_role:
+-        name: "plugin-deployment"
++    - ansible.builtin.import_role:
++        name: "../roles/plugin-deployment"
+diff --git a/deployment/operator/requirements.yml b/deployment/operator/requirements.yml
+index 8baf9191..45428398 100644
+--- a/deployment/operator/requirements.yml
++++ b/deployment/operator/requirements.yml
+@@ -3,8 +3,8 @@ collections:
+   - name: operator_sdk.util
+     version: "0.5.0"
+   - name: kubernetes.core
+-    version: "2.4.0"
++    version: "6.0.0"
+   - name: cloud.common
+     version: "2.1.1"
+   - name: community.docker
+-    version: "3.4.0"
++    version: "4.6.1"
+diff --git a/deployment/operator/roles/plugin-deployment/tasks/main.yml b/deployment/operator/roles/plugin-deployment/tasks/main.yml
+index 9bef44b0..ad82409c 100644
+--- a/deployment/operator/roles/plugin-deployment/tasks/main.yml
++++ b/deployment/operator/roles/plugin-deployment/tasks/main.yml
+@@ -4,29 +4,24 @@
+     name: nri-plugins
+     repo_url: "https://containers.github.io/nri-plugins"
+ 
+-- name: Plugin installation
+-  block:
+-    - name: Set plugin chart reference
+-      set_fact:
+-        chart_ref: "nri-plugins/nri-{{ 'resource-policy-' if pluginName in ['topology-aware', 'balloons'] else '' }}{{ pluginName }}"
+-
+-    - name: Deploy {{ pluginName }} plugin
+-      kubernetes.core.helm:
+-        name: "{{ pluginName }}"
+-        chart_ref: "{{ chart_ref }}"
+-        release_namespace: "{{ ansible_operator_meta.namespace }}"
+-        chart_version: "{{ pluginVersion }}"
+-        wait: True
+-        create_namespace: True
+-        values: "{{ values | default({}) }}"
+-        skip_crds: True
++- name: Deploy balloons plugin
++  kubernetes.core.helm:
++    name: balloons
++    chart_ref: nri-plugins/nri-resource-policy-balloons
++    release_namespace: kube-system
++    chart_version: v0.10.0
++    create_namespace: True
++    skip_crds: True
++    atomic: true
++    update_repo_cache: true
++    kubeconfig: /opt/ansible/.kube/config
+   when:
+-  - state == "present"
++  # - state == "present"
+   - pluginName in ["topology-aware", "balloons", "memory-qos", "memtierd", "sgx-epc"]
+ 
+-- name: Uninstall {{ pluginName }} plugin
+-  kubernetes.core.helm:
+-    name: "{{ pluginName }}"
+-    namespace: "{{ ansible_operator_meta.namespace }}"
+-    state: absent
+-  when: state == "absent" or state == "revoked"
++# - name: Uninstall {{ pluginName }} plugin
++#   kubernetes.core.helm:
++#     name: "{{ pluginName }}"
++#     namespace: "{{ ansible_operator_meta.namespace }}"
++#     state: absent
++#   when: state == "absent" or state == "revoked"

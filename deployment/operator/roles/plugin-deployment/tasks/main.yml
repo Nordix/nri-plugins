@@ -4,29 +4,24 @@
     name: nri-plugins
     repo_url: "https://containers.github.io/nri-plugins"
 
-- name: Plugin installation
-  block:
-    - name: Set plugin chart reference
-      set_fact:
-        chart_ref: "nri-plugins/nri-{{ 'resource-policy-' if pluginName in ['topology-aware', 'balloons'] else '' }}{{ pluginName }}"
-
-    - name: Deploy {{ pluginName }} plugin
-      kubernetes.core.helm:
-        name: "{{ pluginName }}"
-        chart_ref: "{{ chart_ref }}"
-        release_namespace: "{{ ansible_operator_meta.namespace }}"
-        chart_version: "{{ pluginVersion }}"
-        wait: True
-        create_namespace: True
-        values: "{{ values | default({}) }}"
-        skip_crds: True
+- name: Deploy balloons plugin
+  kubernetes.core.helm:
+    name: balloons
+    chart_ref: nri-plugins/nri-resource-policy-balloons
+    release_namespace: kube-system
+    chart_version: v0.10.0
+    create_namespace: True
+    skip_crds: True
+    atomic: true
+    update_repo_cache: true
+    kubeconfig: /opt/ansible/.kube/config
   when:
-  - state == "present"
+  # - state == "present"
   - pluginName in ["topology-aware", "balloons", "memory-qos", "memtierd", "sgx-epc"]
 
-- name: Uninstall {{ pluginName }} plugin
-  kubernetes.core.helm:
-    name: "{{ pluginName }}"
-    namespace: "{{ ansible_operator_meta.namespace }}"
-    state: absent
-  when: state == "absent" or state == "revoked"
+# - name: Uninstall {{ pluginName }} plugin
+#   kubernetes.core.helm:
+#     name: "{{ pluginName }}"
+#     namespace: "{{ ansible_operator_meta.namespace }}"
+#     state: absent
+#   when: state == "absent" or state == "revoked"
